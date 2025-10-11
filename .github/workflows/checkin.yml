@@ -28,7 +28,7 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y google-chrome-stable
         
-    - name: Run auto checkin
+    - name: Run leaflow_checkin.py
       env:
         LEAFLOW_ACCOUNTS: ${{ secrets.LEAFLOW_ACCOUNTS }}
         LEAFLOW_EMAIL: ${{ secrets.LEAFLOW_EMAIL }}
