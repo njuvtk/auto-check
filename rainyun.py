@@ -69,22 +69,22 @@ class RainyunAccount:
     # ------------- 业务实现 ----------------#
     # -------------------------------------- #
     def run(self):
-        """完成一整套业务流程，返回 (成功, 结果消息)"""
+        """完成一整套业务流程，返回 (成功, 结果消息, 积分, 位置)"""
         try:
             log.info(f"[{self.idx:02d}] 开始签到任务")
             if not self._login():
-                return False, "登录失败"
+                return False, "登录失败", None, None
             self._random_delay()
 
             ticket, rand = self._get_slide_verify()
             if not ticket:
-                return False, "滑块验证码获取失败"
+                return False, "滑块验证码获取失败", None, None
 
             self._log("滑块验证码获取成功")
 
             user_info = self._get_user_info()
             if not user_info:
-                return False, "获取用户信息失败"
+                return False, "获取用户信息失败", None, None
 
             ok, msg = self._sign_in(ticket, rand)
             if ok:
@@ -95,20 +95,25 @@ class RainyunAccount:
             # 再次拉取积分
             new_info = self._get_user_info()
             points = new_info["points"] if new_info else user_info["points"]
+            
+            # 格式化位置信息
+            last_login_area = new_info.get('lastLoginArea', user_info.get('lastLoginArea', '未知'))
+            last_ip = new_info.get('lastIP', user_info.get('lastIP', '未知'))
+            location = f"{last_login_area} ({last_ip})"
 
             summary = f"""
 ⚡  签到状态：{msg}
 💰  当前积分：{points}
-🏠  最后登录地点：{user_info.get('lastLoginArea', '')} ({user_info.get('lastIP', '')})
+🏠  最后登录地点：{location}
 """
             self._log(summary.strip())
 
-            return True, msg
+            return True, msg, points, location
 
         except Exception as exc:
             log.error(f"[{self.idx:02d}] 任务异常：{exc}")
             log.debug(traceback.format_exc())
-            return False, str(exc)
+            return False, str(exc), None, None
 
     # -------------------------------------- #
     # ------------ 具体实现 ----------------#
@@ -247,29 +252,32 @@ def main():
             for fut in as_completed(futures):
                 ac = futures[fut]
                 try:
-                    ok, msg = fut.result()
+                    ok, msg, points, location = fut.result()
                 except Exception as exc:
-                    ok, msg = False, f"异常：{exc}"
-                results.append((ac.phone, ok, msg))
+                    ok, msg, points, location = False, f"异常：{exc}", None, None
+                results.append((ac.phone, ok, msg, points, location))
                 log.info(f"[{ac.idx:02d}] {ac.phone[:4]}****{ac.phone[7:]} => {msg} ({'✅' if ok else '❌'})")
     else:
         log.info("顺序执行")
         results = []
         for ac in accounts:
-            ok, msg = ac.run()
-            results.append((ac.phone, ok, msg))
+            ok, msg, points, location = ac.run()
+            results.append((ac.phone, ok, msg, points, location))
             log.info(f"[{ac.idx:02d}] {ac.phone[:4]}****{ac.phone[7:]} => {msg} ({'✅' if ok else '❌'})")
 
     # 发送 Telegram 推送
     if TELEGRAM_TOKEN and TELEGRAM_CHAT:
         try:
             title = "Rainyun 签到通知"
-            success_count = sum(1 for _, ok, _ in results if ok)
+            success_count = sum(1 for _, ok, _, _, _ in results if ok)
             total = len(results)
             body = f"✅ 成功 {success_count}/{total}\n\n"
-            for phone, ok, msg in results:
+            for phone, ok, msg, points, location in results:
                 status = "✅" if ok else "❌"
-                body += f"{status} {phone[:3]}****{phone[7:]}: {msg}\n"
+                body += f"{status} {phone[:3]}****{phone[7:]}:\n"
+                body += f"  状态: {msg}\n"
+                body += f"  积分: {points if points is not None else '未知'}\n"
+                body += f"  位置: {location if location is not None else '未知'}\n\n"
             send_telegram_message(title, body)
             log.info("Telegram 通知已发送")
         except Exception as exc:
@@ -278,7 +286,7 @@ def main():
         log.info("Telegram 参数未完整，跳过推送")
 
     # 如果有人失败，exit 1
-    if not all(ok for _, ok, _ in results):
+    if not all(ok for _, ok, _, _, _ in results):
         log.warning("部分账号签到失败")
         sys.exit(1)
 
