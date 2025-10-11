@@ -271,7 +271,7 @@ def main():
             title = "Rainyun 签到通知"
             success_count = sum(1 for _, ok, _, _, _ in results if ok)
             total = len(results)
-            body = f"✅ 成功 {success_count}/{total}\n\n"
+            body = f"📊 成功 {success_count}/{total}\n\n"
             for phone, ok, msg, points, location in results:
                 status = "✅" if ok else "❌"
                 body += f"{status} {phone[:3]}****{phone[7:]}:\n"
