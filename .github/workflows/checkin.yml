@@ -35,7 +35,6 @@ jobs:
         LEAFLOW_PASSWORD: ${{ secrets.LEAFLOW_PASSWORD }}
         TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
         TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        GITHUB_ACTIONS: true
       run: |
         python leaflow_checkin.py
 
@@ -43,8 +42,7 @@ jobs:
       env:
         yuyun: ${{ secrets.YUYUN_ACCOUNTS }}
         TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-        TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
-        GITHUB_ACTIONS: true
+        TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         MODE: 2   # 并发
         RUN_MAX: 3
       run: |
