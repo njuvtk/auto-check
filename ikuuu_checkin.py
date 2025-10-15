@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-iKUUU 多账号自动签到脚本
+iKuuu 多账号自动签到脚本
 变量名：IKUUU_ACCOUNTS
 变量值：邮箱1:密码1,邮箱2:密码2,邮箱3:密码3
 """
@@ -8,146 +8,156 @@ iKUUU 多账号自动签到脚本
 import os
 import time
 import logging
-import json
 import requests
+import re
+import json
 from urllib.parse import quote
 
 # 配置日志
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-class IkuuuAutoCheckin:
+class IKUUUAutoCheckin:
     def __init__(self, email, password):
         self.email = email
         self.password = password
-        self.host = os.getenv('HOST', 'ikuuu.one')
-        self.telegram_bot_token = os.getenv('TELEGRAM_BOT_TOKEN', '')
-        self.telegram_chat_id = os.getenv('TELEGRAM_CHAT_ID', '')
         
         if not self.email or not self.password:
             raise ValueError("邮箱和密码不能为空")
         
+        self.base_url = "https://ikuuu.de"
         self.session = requests.Session()
         self.session.headers.update({
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+            'Referer': self.base_url,
+            'X-Requested-With': 'XMLHttpRequest'
         })
-    
-    def format_cookie(self, raw_cookie):
-        """格式化Cookie"""
-        if not raw_cookie:
-            return ""
         
-        cookie_parts = []
-        for cookie_header in raw_cookie.split(';'):
-            cookie_part = cookie_header.strip()
-            if cookie_part:
-                cookie_parts.append(cookie_part)
-        
-        return "; ".join(cookie_parts)
-    
     def login(self):
-        """登录获取Cookie"""
-        logger.info(f"{self.email}: 登录中...")
+        """执行登录流程"""
+        logger.info(f"开始登录流程")
         
-        self.login_url = f'https://{self.host}/auth/login'
-        
+        login_url = f"{self.base_url}/auth/login"
         data = {
-            'host': self.host,
             'email': self.email,
-            'passwd': self.password,
-            'code': '',
-            'remember_me': 'off'
+            'password': self.password,
+            'remember': 'on'
         }
         
         try:
-            response = self.session.post(
-                self.login_url,
-                data=data,
-                timeout=30
-            )
-            
-            if response.status_code != 200:
-                raise Exception(f"网络请求错误 - {response.status_code}")
-            
+            response = self.session.post(login_url, data=data)
             result = response.json()
             
-            if result.get('ret') != 1:
-                raise Exception(f"登录失败: {result.get('msg', '未知错误')}")
-            
-            logger.info(f"{self.email}: {result.get('msg', '登录成功')}")
-            
-            # 获取Cookie
-            raw_cookie = response.headers.get('Set-Cookie', '')
-            self.cookie = self.format_cookie(raw_cookie)
-            
-            return True
-            
+            if result.get('ret') == 1:
+                logger.info("登录成功")
+                return True
+            else:
+                error_msg = result.get('msg', '未知错误')
+                logger.error(f"登录失败: {error_msg}")
+                return False
+                
         except Exception as e:
-            logger.error(f"{self.email}: 登录失败 - {str(e)}")
-            raise
+            logger.error(f"登录异常: {str(e)}")
+            return False
     
     def checkin(self):
-        """执行签到"""
-        logger.info(f"{self.email}: 开始签到...")
+        """执行签到流程"""
+        logger.info("开始签到流程")
         
-        self.checkin_url = f'https://{self.host}/user/checkin'
+        checkin_url = f"{self.base_url}/user/checkin"
         
         try:
-            headers = {
-                'Cookie': self.cookie,
-                'Referer': self.checkin_url,
-                'Origin': f'https://{self.host}'
-            }
-            
-            response = self.session.post(
-                self.checkin_url,
-                headers=headers,
-                timeout=30
-            )
-            
-            if response.status_code != 200:
-                raise Exception(f"网络请求错误 - {response.status_code}")
-            
+            response = self.session.post(checkin_url)
             result = response.json()
-            message = result.get('msg', '签到完成')
             
-            logger.info(f"{self.email}: {message}")
-            return message
-            
+            if result.get('ret') == 1:
+                message = result.get('msg', '签到成功')
+                logger.info(f"签到成功: {message}")
+                return True, message
+            else:
+                error_msg = result.get('msg', '未知错误')
+                logger.error(f"签到失败: {error_msg}")
+                return False, error_msg
+                
         except Exception as e:
-            logger.error(f"{self.email}: 签到失败 - {str(e)}")
-            raise
+            logger.error(f"签到异常: {str(e)}")
+            return False, str(e)
+    
+    def get_traffic(self):
+        """获取流量信息"""
+        logger.info("获取流量信息")
+        
+        user_url = f"{self.base_url}/user"
+        
+        try:
+            response = self.session.get(user_url)
+            
+            # 使用正则表达式提取流量信息
+            used = re.search(r'已使用：.*?<\/td><td>(.*?)<span', response.text)
+            left = re.search(r'剩余：.*?<\/td><td>(.*?)<span', response.text)
+            total = re.search(r'总流量：.*?<\/td><td>(.*?)<span', response.text)
+            
+            if not all([used, left, total]):
+                logger.warning("无法解析流量信息")
+                return False, ["无法解析流量信息"]
+                
+            traffic_info = [
+                f"已使用流量: {used.group(1).strip()}",
+                f"剩余流量: {left.group(1).strip()}",
+                f"总流量: {total.group(1).strip()}"
+            ]
+            
+            logger.info(f"流量信息: {traffic_info}")
+            return True, traffic_info
+                
+        except Exception as e:
+            logger.error(f"获取流量异常: {str(e)}")
+            return False, [str(e)]
     
     def run(self):
-        """执行完整流程"""
+        """单个账号执行流程"""
         try:
-            self.login()
-            result = self.checkin()
-            return True, result
+            logger.info(f"开始处理账号: {self.email}")
+            
+            # 登录
+            if not self.login():
+                return False, "登录失败", []
+            
+            # 签到
+            checkin_success, checkin_msg = self.checkin()
+            
+            # 获取流量
+            traffic_success, traffic_info = self.get_traffic()
+            
+            # 汇总结果
+            overall_success = checkin_success and traffic_success
+            result_msg = checkin_msg if checkin_success else "签到失败"
+            
+            logger.info(f"账号 {self.email} 处理完成 - 状态: {'成功' if overall_success else '部分成功'}")
+            return overall_success, result_msg, traffic_info
+            
         except Exception as e:
-            return False, str(e)
-        finally:
-            self.session.close()
+            error_msg = f"处理账号时发生异常: {str(e)}"
+            logger.error(error_msg)
+            return False, error_msg, []
 
 class MultiAccountManager:
-    """多账号管理器 - iKUUU版本"""
+    """多账号管理器 - 简化配置版本"""
     
     def __init__(self):
-        self.telegram_bot_token = os.getenv('TELEGRAM_BOT_TOKEN', '')
-        self.telegram_chat_id = os.getenv('TELEGRAM_CHAT_ID', '')
         self.accounts = self.load_accounts()
     
     def load_accounts(self):
-        """从环境变量加载多账号信息 - iKUUU格式"""
+        """从环境变量加载多账号信息，支持冒号分隔多账号和单账号"""
         accounts = []
         
-        logger.info("开始加载iKUUU账号配置...")
+        logger.info("开始加载账号配置...")
         
-        # 方法1: 冒号分隔多账号格式 (IKUUU_ACCOUNTS)
+        # 方法1: 冒号分隔多账号格式
         accounts_str = os.getenv('IKUUU_ACCOUNTS', '').strip()
         if accounts_str:
             try:
-                logger.info("尝试解析iKUUU多账号配置")
+                logger.info("尝试解析冒号分隔多账号配置")
                 account_pairs = [pair.strip() for pair in accounts_str.split(',')]
                 
                 logger.info(f"找到 {len(account_pairs)} 个账号")
@@ -170,14 +180,14 @@ class MultiAccountManager:
                         logger.warning(f"账号对缺少冒号分隔符")
                 
                 if accounts:
-                    logger.info(f"从iKUUU格式成功加载了 {len(accounts)} 个账号")
+                    logger.info(f"从冒号分隔格式成功加载了 {len(accounts)} 个账号")
                     return accounts
                 else:
-                    logger.warning("多账号配置中没有找到有效的账号信息")
+                    logger.warning("冒号分隔配置中没有找到有效的账号信息")
             except Exception as e:
-                logger.error(f"解析多账号配置失败: {e}")
+                logger.error(f"解析冒号分隔账号配置失败: {e}")
         
-        # 方法2: 单账号格式 (IKUUU_EMAIL 和 IKUUU_PASSWORD)
+        # 方法2: 单账号格式
         single_email = os.getenv('IKUUU_EMAIL', '').strip()
         single_password = os.getenv('IKUUU_PASSWORD', '').strip()
         
@@ -195,47 +205,11 @@ class MultiAccountManager:
         logger.error("1. IKUUU_ACCOUNTS: 冒号分隔多账号 (email1:pass1,email2:pass2)")
         logger.error("2. IKUUU_EMAIL 和 IKUUU_PASSWORD: 单账号")
         
-        raise ValueError("未找到有效的iKUUU账号配置")
-    
-    def send_notification(self, results):
-        """发送汇总通知到Telegram"""
-        if not self.telegram_bot_token or not self.telegram_chat_id:
-            logger.info("Telegram配置未设置，跳过通知")
-            return
-        
-        try:
-            # 构建通知消息
-            success_count = sum(1 for _, success, _ in results if success)
-            total_count = len(results)
-            
-            message = f"iKUUU 签到通知\n"
-            message += f"📊 成功: {success_count}/{total_count}\n\n"
-            
-            for email, success, result in results:
-                status = "✅" if success else "❌"
-                # 隐藏邮箱部分字符以保护隐私
-                masked_email = email[:3] + "***" + email[email.find("@"):]
-                message += f"{status} {masked_email}: {result}\n"
-            
-            url = f"https://api.telegram.org/bot{self.telegram_bot_token}/sendMessage"
-            data = {
-                "chat_id": self.telegram_chat_id,
-                "text": message,
-                "parse_mode": "HTML"
-            }
-            
-            response = requests.post(url, data=data, timeout=10)
-            if response.status_code == 200:
-                logger.info("Telegram汇总通知发送成功")
-            else:
-                logger.error(f"Telegram通知发送失败: {response.text}")
-                
-        except Exception as e:
-            logger.error(f"发送Telegram通知时出错: {str(e)}")
+        raise ValueError("未找到有效的账号配置")
     
     def run_all(self):
         """运行所有账号的签到流程"""
-        logger.info(f"开始执行 {len(self.accounts)} 个iKUUU账号的签到任务")
+        logger.info(f"开始执行 {len(self.accounts)} 个账号的签到任务")
         
         results = []
         
@@ -243,45 +217,86 @@ class MultiAccountManager:
             logger.info(f"处理第 {i}/{len(self.accounts)} 个账号")
             
             try:
-                auto_checkin = IkuuuAutoCheckin(account['email'], account['password'])
-                success, result = auto_checkin.run()
-                results.append((account['email'], success, result))
+                auto_checkin = IKUUUAutoCheckin(account['email'], account['password'])
+                success, result_msg, traffic_info = auto_checkin.run()
+                results.append({
+                    'email': account['email'],
+                    'success': success,
+                    'result': result_msg,
+                    'traffic': traffic_info
+                })
                 
                 # 在账号之间添加间隔，避免请求过于频繁
                 if i < len(self.accounts):
-                    wait_time = 3
+                    wait_time = 5
                     logger.info(f"等待{wait_time}秒后处理下一个账号...")
                     time.sleep(wait_time)
                     
             except Exception as e:
                 error_msg = f"处理账号时发生异常: {str(e)}"
                 logger.error(error_msg)
-                results.append((account['email'], False, error_msg))
+                results.append({
+                    'email': account['email'],
+                    'success': False,
+                    'result': error_msg,
+                    'traffic': []
+                })
         
-        # 发送汇总通知
-        self.send_notification(results)
+        # 打印汇总结果
+        self.print_results(results)
         
         # 返回总体结果
-        success_count = sum(1 for _, success, _ in results if success)
+        success_count = sum(1 for r in results if r['success'])
         return success_count == len(self.accounts), results
+    
+    def print_results(self, results):
+        """打印汇总结果"""
+        print("\n" + "="*60)
+        print("iKuuu VPN 签到结果汇总")
+        print("="*60)
+        
+        success_count = sum(1 for r in results if r['success'])
+        print(f"✅ 成功: {success_count}/{len(results)}")
+        print("="*60)
+        
+        for result in results:
+            status = "✅" if result['success'] else "❌"
+            # 隐藏邮箱部分字符以保护隐私
+            masked_email = self.mask_email(result['email'])
+            print(f"\n{status} {masked_email}")
+            print(f"结果: {result['result']}")
+            
+            if result['traffic']:
+                print("流量信息:")
+                for traffic in result['traffic']:
+                    print(f"  - {traffic}")
+        
+        print("\n" + "="*60)
+    
+    def mask_email(self, email):
+        """隐藏邮箱部分字符以保护隐私"""
+        if '@' in email:
+            username, domain = email.split('@', 1)
+            return f"{username[:3]}***@{domain}"
+        return email
 
 def main():
-    """主函数 - iKUUU版本"""
+    """主函数"""
     try:
         manager = MultiAccountManager()
         overall_success, detailed_results = manager.run_all()
         
         if overall_success:
-            logger.info("✅ 所有iKUUU账号签到成功")
+            logger.info("✅ 所有账号签到成功")
             exit(0)
         else:
-            success_count = sum(1 for _, success, _ in detailed_results if success)
-            logger.warning(f"⚠️ 部分iKUUU账号签到失败: {success_count}/{len(detailed_results)} 成功")
-            # 即使有失败，也不退出错误状态
+            success_count = sum(1 for r in detailed_results if r['success'])
+            logger.warning(f"⚠️ 部分账号签到失败: {success_count}/{len(detailed_results)} 成功")
+            # 即使有失败，也不退出错误状态，因为可能部分成功
             exit(0)
             
     except Exception as e:
-        logger.error(f"❌ iKUUU脚本执行出错: {str(e)}")
+        logger.error(f"❌ 脚本执行出错: {e}")
         exit(1)
 
 if __name__ == "__main__":
