@@ -23,6 +23,5 @@ jobs:
     - name: Run ikuuu_checkin.py
       env:
         IKUUU_ACCOUNTS: ${{ secrets.IKUUU_ACCOUNTS }}
-        HOST: ikuuu.de
       run: |
         python3 ikuuu_checkin.py
