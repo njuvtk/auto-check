@@ -31,8 +31,6 @@ jobs:
     - name: Run leaflow_checkin.py
       env:
         LEAFLOW_ACCOUNTS: ${{ secrets.LEAFLOW_ACCOUNTS }}
-        LEAFLOW_EMAIL: ${{ secrets.LEAFLOW_EMAIL }}
-        LEAFLOW_PASSWORD: ${{ secrets.LEAFLOW_PASSWORD }}
         TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
         TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
       run: |
@@ -51,7 +49,8 @@ jobs:
     - name: Run ikuuu_checkin.py
       env:
         IKUUU_ACCOUNTS: ${{ secrets.IKUUU_ACCOUNTS }}
-        HOST: ikuuu.de
+        TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
       run: |
         python3 ikuuu_checkin.py
 
