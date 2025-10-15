@@ -25,7 +25,7 @@ class IKUUUAutoCheckin:
         if not self.email or not self.password:
             raise ValueError("邮箱和密码不能为空")
         
-        self.base_url = "https://ikuuu.de"
+        self.base_url = "https://ikuuu.org"
         self.session = requests.Session()
         self.session.headers.update({
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
@@ -146,9 +146,11 @@ class MultiAccountManager:
     
     def __init__(self):
         self.accounts = self.load_accounts()
+        self.telegram_bot_token = os.getenv('TELEGRAM_BOT_TOKEN', '')
+        self.telegram_chat_id = os.getenv('TELEGRAM_CHAT_ID', '')
     
     def load_accounts(self):
-        """从环境变量加载多账号信息，支持冒号分隔多账号和单账号"""
+        """从环境变量加载多账号信息，支持冒号分隔多账号"""
         accounts = []
         
         logger.info("开始加载账号配置...")
@@ -187,25 +189,48 @@ class MultiAccountManager:
             except Exception as e:
                 logger.error(f"解析冒号分隔账号配置失败: {e}")
         
-        # 方法2: 单账号格式
-        single_email = os.getenv('IKUUU_EMAIL', '').strip()
-        single_password = os.getenv('IKUUU_PASSWORD', '').strip()
-        
-        if single_email and single_password:
-            accounts.append({
-                'email': single_email,
-                'password': single_password
-            })
-            logger.info("加载了单个账号配置")
-            return accounts
-        
         # 如果所有方法都失败
         logger.error("未找到有效的账号配置")
-        logger.error("请检查以下环境变量设置:")
-        logger.error("1. IKUUU_ACCOUNTS: 冒号分隔多账号 (email1:pass1,email2:pass2)")
-        logger.error("2. IKUUU_EMAIL 和 IKUUU_PASSWORD: 单账号")
+        logger.error("请检查环境变量设置:")
+        logger.error("IKUUU_ACCOUNTS: 冒号分隔多账号 (email1:pass1,email2:pass2)")
         
         raise ValueError("未找到有效的账号配置")
+    
+    def send_telegram_notification(self, results):
+        """发送通知到Telegram"""
+        if not self.telegram_bot_token or not self.telegram_chat_id:
+            logger.info("Telegram配置未设置，跳过通知")
+            return
+        
+        try:
+            # 构建通知消息
+            success_count = sum(1 for _, success, _ in results if success)
+            total_count = len(results)
+            
+            message = f"iKuuu VPN 签到通知\n"
+            message += f"📊 成功: {success_count}/{total_count}\n\n"
+            
+            for email, success, result in results:
+                status = "✅" if success else "❌"
+                # 隐藏邮箱部分字符以保护隐私
+                masked_email = self.mask_email(email)
+                message += f"{status} {masked_email}: {result}\n"
+            
+            url = f"https://api.telegram.org/bot{self.telegram_bot_token}/sendMessage"
+            data = {
+                "chat_id": self.telegram_chat_id,
+                "text": message,
+                "parse_mode": "HTML"
+            }
+            
+            response = requests.post(url, data=data, timeout=10)
+            if response.status_code == 200:
+                logger.info("Telegram通知发送成功")
+            else:
+                logger.error(f"Telegram通知发送失败: {response.text}")
+                
+        except Exception as e:
+            logger.error(f"发送Telegram通知时出错: {e}")
     
     def run_all(self):
         """运行所有账号的签到流程"""
@@ -245,6 +270,9 @@ class MultiAccountManager:
         # 打印汇总结果
         self.print_results(results)
         
+        # 发送Telegram通知
+        self.send_telegram_notification(results)
+        
         # 返回总体结果
         success_count = sum(1 for r in results if r['success'])
         return success_count == len(self.accounts), results
@@ -256,7 +284,7 @@ class MultiAccountManager:
         print("="*60)
         
         success_count = sum(1 for r in results if r['success'])
-        print(f"✅ 成功: {success_count}/{len(results)}")
+        print(f"📊 成功: {success_count}/{len(results)}")
         print("="*60)
         
         for result in results:
