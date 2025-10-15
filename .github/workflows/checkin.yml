@@ -47,3 +47,11 @@ jobs:
         RUN_MAX: 3
       run: |
         python rainyun.py
+
+    - name: Run ikuuu_checkin.py
+      env:
+        IKUUU_ACCOUNTS: ${{ secrets.IKUUU_ACCOUNTS }}
+        HOST: ikuuu.de
+      run: |
+        python3 ikuuu_checkin.py
+
