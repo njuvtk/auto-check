@@ -156,75 +156,79 @@ class IKUUUAutoCheckin:
             return False, str(e)
     
     def get_traffic(self, cookie=None):
-        """获取流量信息 - 使用Base64解码方法"""
-        logger.info("获取流量信息")
+    """获取流量信息 - 按照原项目逻辑"""
+    logger.info("获取流量信息")
+    
+    user_url = f"{self.base_url}/user"
+    
+    try:
+        # 构建请求头，如果提供了cookie则添加
+        headers = self.session.headers.copy()
+        if cookie:
+            headers['Cookie'] = cookie
         
-        user_url = f"{self.base_url}/user"
+        response = self.session.get(user_url, headers=headers, timeout=15)
+        logger.info(f"获取用户页面状态码: {response.status_code}")
         
+        # 从HTML中提取Base64编码的字符串
+        base64_match = re.search(r'var originBody = "([^"]+)"', response.text)
+        
+        if not base64_match:
+            logger.error("未在页面中找到Base64编码的流量数据")
+            return False, ["未找到流量数据"]
+        
+        base64_string = base64_match.group(1)
+        logger.info(f"找到Base64编码字符串: {base64_string[:50]}...")
+        
+        # 解码Base64字符串
         try:
-            # 构建请求头，如果提供了cookie则添加
-            headers = self.session.headers.copy()
-            if cookie:
-                headers['Cookie'] = cookie
+            decoded_data = self.decode_base64(base64_string)
+            logger.info(f"Base64解码成功，长度: {len(decoded_data)}")
             
-            response = self.session.get(user_url, headers=headers, timeout=15)
-            logger.info(f"获取用户页面状态码: {response.status_code}")
-            
-            # 从HTML中提取Base64编码的字符串
-            # 原项目使用正则：/var originBody = "([^"]+)"/
-            base64_match = re.search(r'var originBody = "([^"]+)"', response.text)
-            
-            if not base64_match:
-                logger.error("未在页面中找到Base64编码的流量数据")
-                return False, ["未找到流量数据"]
-            
-            base64_string = base64_match.group(1)
-            logger.info(f"找到Base64编码字符串: {base64_string[:50]}...")
-            
-            # 解码Base64字符串
-            try:
-                decoded_data = self.decode_base64(base64_string)
-                logger.info(f"Base64解码成功，长度: {len(decoded_data)}")
-            except Exception as e:
-                logger.error(f"Base64解码失败: {str(e)}")
-                return False, ["流量数据解码失败"]
-            
-            # 根据原项目，应有正则表达式匹配今日已用流量和剩余流量
-            # 由于原项目中正则未提供，这里使用常见格式
-            # 今日已用流量格式: "今日已用：10.0 GB"
-            # 剩余流量格式: "剩余流量：890.0 GB"
-            
-            # 尝试多种可能格式
-            traffic_patterns = [
-                (r'今日已用[：:]\s*([\d.]+)\s*([GMK]?B)', '今日已用流量'),
-                (r'已用流量[：:]\s*([\d.]+)\s*([GMK]?B)', '已用流量'),
-                (r'剩余流量[：:]\s*([\d.]+)\s*([GMK]?B)', '剩余流量'),
-                (r'剩余[：:]\s*([\d.]+)\s*([GMK]?B)', '剩余'),
-            ]
-            
-            traffic_info = []
-            found_data = {}
-            
-            for pattern, desc in traffic_patterns:
-                match = re.search(pattern, decoded_data, re.IGNORECASE)
-                if match:
-                    value = match.group(1)
-                    unit = match.group(2) if len(match.groups()) > 1 else ''
-                    found_data[desc] = f"{value} {unit}"
-                    traffic_info.append(f"{desc}：{value} {unit}")
-                    logger.info(f"找到{desc}: {value} {unit}")
-            
-            if len(found_data) >= 2:
-                logger.info("成功解析流量信息")
-                return True, traffic_info
-            else:
-                logger.warning("无法完整解析流量信息")
-                logger.debug(f"解码后数据: {decoded_data[:200]}...")
-                return False, ["流量信息解析不完整"]
-                
+            # 打印解码后数据的开头部分用于调试
+            logger.debug(f"解码后数据开头: {decoded_data[:200]}...")
         except Exception as e:
-            logger.error(f"获取流量异常: {str(e)}")
-            return False, [str(e)]
+            logger.error(f"Base64解码失败: {str(e)}")
+            return False, ["流量数据解码失败"]
+        
+        # 按照原项目，实现正则表达式匹配
+        # 根据常见流量信息格式，我们定义如下正则表达式
+        # 如果实际格式不同，需要用户提供实际解码后的数据进行调整
+        
+        todayTrafficReg = r'今日已用[：:]\s*([\d.]+)\s*([GMK]?B)'
+        restTrafficReg = r'剩余流量[：:]\s*([\d.]+)\s*([GMK]?B)'
+        
+        logger.info(f"使用正则表达式匹配流量信息:")
+        logger.info(f"  今日流量: {todayTrafficReg}")
+        logger.info(f"  剩余流量: {restTrafficReg}")
+        
+        # 按照原项目逻辑进行匹配
+        traffic_res = re.search(todayTrafficReg, decoded_data)
+        rest_res = re.search(restTrafficReg, decoded_data)
+        
+        logger.info(f"匹配结果: 今日流量={traffic_res is not None}, 剩余流量={rest_res is not None}")
+        
+        if not traffic_res or not rest_res:
+            logger.error("无法匹配流量信息")
+            return False, ["查询流量失败，请检查正则和用户页面 HTML 结构"]
+
+        # 提取流量信息，按照原项目逻辑
+        today_value = traffic_res.group(1)
+        today_unit = traffic_res.group(2) if traffic_res.lastindex > 1 else ''
+        rest_value = rest_res.group(1)
+        rest_unit = rest_res.group(2) if rest_res.lastindex > 1 else ''
+        
+        logger.info(f"今日流量: {today_value} {today_unit}")
+        logger.info(f"剩余流量: {rest_value} {rest_unit}")
+        
+        return True, [
+            f"今日已用：{today_value} {today_unit}",
+            f"剩余流量：{rest_value} {rest_unit}"
+        ]
+        
+    except Exception as e:
+        logger.error(f"获取流量异常: {str(e)}")
+        return False, [str(e)]
     
     def run(self):
         """单个账号执行流程"""
