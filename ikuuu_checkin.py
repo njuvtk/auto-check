@@ -11,7 +11,9 @@ import logging
 import requests
 import re
 import json
-from urllib.parse import quote
+import base64
+from urllib.parse import quote, unquote
+from io import BytesIO
 
 # 配置日志
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -28,37 +30,85 @@ class IKUUUAutoCheckin:
         self.base_url = "https://ikuuu.de"
         self.session = requests.Session()
         self.session.headers.update({
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/100.0.4992.0 Safari/537.36',
+            'Accept': 'application/json, text/javascript, */*; q=0.01',
+            'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+            'Accept-Encoding': 'gzip, deflate',
             'Referer': self.base_url,
-            'X-Requested-With': 'XMLHttpRequest'
+            'Origin': self.base_url,
         })
         
-    def login(self):
-        """执行登录流程"""
-        logger.info(f"开始登录流程")
+    def decode_base64(self, s):
+        """Base64解码，兼容UTF-8编码"""
+        try:
+            # 首先尝试直接解码
+            return base64.b64decode(s).decode('utf-8')
+        except UnicodeDecodeError:
+            # 如果失败，尝试处理百分比编码
+            try:
+                return unquote(base64.b64decode(s).decode('utf-8'))
+            except Exception:
+                # 作为最后手段，使用latin-1解码
+                return base64.b64decode(s).decode('latin-1')
+    
+    def get_cookie(self):
+        """登录并获取Cookie"""
+        logger.info(f"开始登录流程，邮箱: {self.email}")
+        
+        # 访问首页获取初始cookie
+        try:
+            logger.info("访问首页获取初始cookie...")
+            self.session.get(self.base_url, timeout=15)
+            logger.info("首页访问完成，已获取初始cookie")
+        except Exception as e:
+            logger.error(f"访问首页失败: {str(e)}")
+            return False, None
         
         login_url = f"{self.base_url}/auth/login"
+        
+        # 使用表单数据形式提交
         data = {
             'email': self.email,
-            'password': self.password,
-            'remember': 'on'
+            'passwd': self.password  # 注意这里是'passwd'不是'password'
         }
         
         try:
-            response = self.session.post(login_url, data=data)
-            result = response.json()
+            logger.info("尝试登录...")
+            response = self.session.post(login_url, data=data, timeout=15)
+            logger.info(f"登录响应状态码: {response.status_code}")
             
-            if result.get('ret') == 1:
-                logger.info("登录成功")
-                return True
-            else:
-                error_msg = result.get('msg', '未知错误')
-                logger.error(f"登录失败: {error_msg}")
-                return False
+            try:
+                result = response.json()
+                logger.info(f"登录响应JSON: {result}")
                 
+                if result.get('ret') == 1:  # 原项目使用ret==1表示成功
+                    logger.info("登录成功")
+                    
+                    # 从响应头获取Cookie
+                    cookies = response.headers.get('set-cookie', [])
+                    if cookies:
+                        cookie_str = '; '.join([str(c) for c in cookies])
+                        logger.info("成功获取Cookie")
+                        return True, cookie_str
+                    else:
+                        logger.warning("未在响应头中找到Cookie")
+                        return True, None
+                
+                else:
+                    error_msg = result.get('msg', '未知错误')
+                    logger.error(f"登录失败: {error_msg}")
+                    return False, error_msg
+                    
+            except ValueError:
+                logger.error("登录响应不是JSON格式")
+                return False, "响应解析失败"
+                
+        except requests.exceptions.RequestException as e:
+            logger.error(f"登录请求异常: {str(e)}")
+            return False, str(e)
         except Exception as e:
             logger.error(f"登录异常: {str(e)}")
-            return False
+            return False, str(e)
     
     def checkin(self):
         """执行签到流程"""
@@ -67,48 +117,110 @@ class IKUUUAutoCheckin:
         checkin_url = f"{self.base_url}/user/checkin"
         
         try:
-            response = self.session.post(checkin_url)
-            result = response.json()
+            response = self.session.post(checkin_url, timeout=15)
+            logger.info(f"签到响应状态码: {response.status_code}")
             
-            if result.get('ret') == 1:
-                message = result.get('msg', '签到成功')
-                logger.info(f"签到成功: {message}")
-                return True, message
-            else:
-                error_msg = result.get('msg', '未知错误')
-                logger.error(f"签到失败: {error_msg}")
-                return False, error_msg
+            try:
+                result = response.json()
+                logger.info(f"签到响应JSON: {result}")
                 
+                if result.get('ret') == 1:
+                    message = result.get('msg', '签到成功')
+                    logger.info(f"签到成功: {message}")
+                    return True, message
+                else:
+                    error_msg = result.get('msg', '未知错误')
+                    # 检查是否已签到
+                    if '已签到' in error_msg or 'already' in error_msg.lower():
+                        logger.info(f"提示: {error_msg}")
+                        return True, error_msg
+                    else:
+                        logger.error(f"签到失败: {error_msg}")
+                        return False, error_msg
+                    
+            except ValueError:
+                # 如果不是JSON响应，检查HTML内容
+                html_content = response.text
+                if 'already-checkin' in html_content or '已签到' in html_content:
+                    logger.info("提示：已经签到过了")
+                    return True, "今日已签到"
+                else:
+                    logger.error("无法确定签到状态：无法解析响应内容")
+                    return False, "签到异常，无法解析响应"
+                
+        except requests.exceptions.RequestException as e:
+            logger.error(f"签到请求异常: {str(e)}")
+            return False, str(e)
         except Exception as e:
             logger.error(f"签到异常: {str(e)}")
             return False, str(e)
     
-    def get_traffic(self):
-        """获取流量信息"""
+    def get_traffic(self, cookie=None):
+        """获取流量信息 - 使用Base64解码方法"""
         logger.info("获取流量信息")
         
         user_url = f"{self.base_url}/user"
         
         try:
-            response = self.session.get(user_url)
+            # 构建请求头，如果提供了cookie则添加
+            headers = self.session.headers.copy()
+            if cookie:
+                headers['Cookie'] = cookie
             
-            # 使用正则表达式提取流量信息
-            used = re.search(r'已使用：.*?<\/td><td>(.*?)<span', response.text)
-            left = re.search(r'剩余：.*?<\/td><td>(.*?)<span', response.text)
-            total = re.search(r'总流量：.*?<\/td><td>(.*?)<span', response.text)
+            response = self.session.get(user_url, headers=headers, timeout=15)
+            logger.info(f"获取用户页面状态码: {response.status_code}")
             
-            if not all([used, left, total]):
-                logger.warning("无法解析流量信息")
-                return False, ["无法解析流量信息"]
-                
-            traffic_info = [
-                f"已使用流量: {used.group(1).strip()}",
-                f"剩余流量: {left.group(1).strip()}",
-                f"总流量: {total.group(1).strip()}"
+            # 从HTML中提取Base64编码的字符串
+            # 原项目使用正则：/var originBody = "([^"]+)"/
+            base64_match = re.search(r'var originBody = "([^"]+)"', response.text)
+            
+            if not base64_match:
+                logger.error("未在页面中找到Base64编码的流量数据")
+                return False, ["未找到流量数据"]
+            
+            base64_string = base64_match.group(1)
+            logger.info(f"找到Base64编码字符串: {base64_string[:50]}...")
+            
+            # 解码Base64字符串
+            try:
+                decoded_data = self.decode_base64(base64_string)
+                logger.info(f"Base64解码成功，长度: {len(decoded_data)}")
+            except Exception as e:
+                logger.error(f"Base64解码失败: {str(e)}")
+                return False, ["流量数据解码失败"]
+            
+            # 根据原项目，应有正则表达式匹配今日已用流量和剩余流量
+            # 由于原项目中正则未提供，这里使用常见格式
+            # 今日已用流量格式: "今日已用：10.0 GB"
+            # 剩余流量格式: "剩余流量：890.0 GB"
+            
+            # 尝试多种可能格式
+            traffic_patterns = [
+                (r'今日已用[：:]\s*([\d.]+)\s*([GMK]?B)', '今日已用流量'),
+                (r'已用流量[：:]\s*([\d.]+)\s*([GMK]?B)', '已用流量'),
+                (r'剩余流量[：:]\s*([\d.]+)\s*([GMK]?B)', '剩余流量'),
+                (r'剩余[：:]\s*([\d.]+)\s*([GMK]?B)', '剩余'),
             ]
             
-            logger.info(f"流量信息: {traffic_info}")
-            return True, traffic_info
+            traffic_info = []
+            found_data = {}
+            
+            for pattern, desc in traffic_patterns:
+                match = re.search(pattern, decoded_data, re.IGNORECASE)
+                if match:
+                    value = match.group(1)
+                    unit = match.group(2) if len(match.groups()) > 1 else ''
+                    found_data[desc] = f"{value} {unit}"
+                    traffic_info.append(f"{desc}：{value} {unit}")
+                    logger.info(f"找到{desc}: {value} {unit}")
+            
+            if len(found_data) >= 2:
+                logger.info("成功解析流量信息")
+                return True, traffic_info
+            else:
+                logger.warning("无法完整解析流量信息")
+                logger.debug(f"解码后数据: {decoded_data[:200]}...")
+                return False, ["流量信息解析不完整"]
                 
         except Exception as e:
             logger.error(f"获取流量异常: {str(e)}")
@@ -119,15 +231,18 @@ class IKUUUAutoCheckin:
         try:
             logger.info(f"开始处理账号: {self.email}")
             
-            # 登录
-            if not self.login():
-                return False, "登录失败", []
+            # 登录并获取Cookie
+            login_success, cookie = self.get_cookie()
+            if not login_success:
+                if isinstance(cookie, str) and "登录失败" in cookie:
+                    return False, cookie, []
+                return False, "登录失败获取Cookie", []
             
             # 签到
             checkin_success, checkin_msg = self.checkin()
             
-            # 获取流量
-            traffic_success, traffic_info = self.get_traffic()
+            # 获取流量 (使用登录获取的Cookie)
+            traffic_success, traffic_info = self.get_traffic(cookie)
             
             # 汇总结果
             overall_success = checkin_success and traffic_success
@@ -146,8 +261,8 @@ class MultiAccountManager:
     
     def __init__(self):
         self.accounts = self.load_accounts()
-        self.telegram_bot_token = os.getenv('TELEGRAM_BOT_TOKEN', '')
-        self.telegram_chat_id = os.getenv('TELEGRAM_CHAT_ID', '')
+        self.telegram_bot_token = os.getenv('TG_BOT_TOKEN', '')
+        self.telegram_chat_id = os.getenv('TG_CHAT_ID', '')
     
     def load_accounts(self):
         """从环境变量加载多账号信息，支持冒号分隔多账号"""
@@ -162,8 +277,6 @@ class MultiAccountManager:
                 logger.info("尝试解析冒号分隔多账号配置")
                 account_pairs = [pair.strip() for pair in accounts_str.split(',')]
                 
-                logger.info(f"找到 {len(account_pairs)} 个账号")
-                
                 for i, pair in enumerate(account_pairs):
                     if ':' in pair:
                         email, password = pair.split(':', 1)
@@ -175,11 +288,9 @@ class MultiAccountManager:
                                 'email': email,
                                 'password': password
                             })
-                            logger.info(f"成功添加第 {i+1} 个账号")
-                        else:
-                            logger.warning(f"账号对格式错误")
+                            logger.info(f"成功添加第 {i+1} 个账号: {email[:5]}***")
                     else:
-                        logger.warning(f"账号对缺少冒号分隔符")
+                        logger.warning(f"账号对缺少冒号分隔符: {pair}")
                 
                 if accounts:
                     logger.info(f"从冒号分隔格式成功加载了 {len(accounts)} 个账号")
@@ -207,14 +318,14 @@ class MultiAccountManager:
             success_count = sum(1 for _, success, _ in results if success)
             total_count = len(results)
             
-            message = f"iKuuu VPN 签到通知\n"
-            message += f"📊 成功: {success_count}/{total_count}\n\n"
+            message = f"<b>iKuuu VPN 签到通知</b>\n"
+            message += f"📊 <b>成功: {success_count}/{total_count}</b>\n\n"
             
             for email, success, result in results:
                 status = "✅" if success else "❌"
                 # 隐藏邮箱部分字符以保护隐私
                 masked_email = self.mask_email(email)
-                message += f"{status} {masked_email}: {result}\n"
+                message += f"{status} <i>{masked_email}</i>: {result}\n"
             
             url = f"https://api.telegram.org/bot{self.telegram_bot_token}/sendMessage"
             data = {
@@ -253,7 +364,7 @@ class MultiAccountManager:
                 
                 # 在账号之间添加间隔，避免请求过于频繁
                 if i < len(self.accounts):
-                    wait_time = 5
+                    wait_time = 8
                     logger.info(f"等待{wait_time}秒后处理下一个账号...")
                     time.sleep(wait_time)
                     
