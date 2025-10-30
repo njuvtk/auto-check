@@ -13,7 +13,6 @@ import re
 import json
 import base64
 from urllib.parse import quote, unquote
-from io import BytesIO
 
 # 配置日志
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -246,26 +245,46 @@ class MultiAccountManager:
         raise ValueError("未找到有效的账号配置")
     
     def send_telegram_notification(self, results):
-        """发送通知到Telegram"""
+        """发送详细的汇总结果通知到Telegram"""
         if not self.telegram_bot_token or not self.telegram_chat_id:
             logger.info("Telegram配置未设置，跳过通知")
             return
+        
         try:
             success_count = sum(1 for r in results if r['success'])
             total_count = len(results)
-            message = f"<b>iKuuu VPN 签到通知</b>\n"
-            message += f"📊 <b>成功: {success_count}/{total_count}</b>\n\n"
+            
+            # 标题和摘要
+            title = "<b>iKuuu VPN 签到结果</b>"
+            summary = f"📊 <b>总览: {success_count} / {total_count} 成功</b>"
+            
+            message = f"{title}\n{summary}\n"
+            message += "─" * 20 + "\n"
+
+            # 每个账号的详细结果
             for r in results:
-                email, success, result = r['email'], r['success'], r['result']
-                status = "✅" if success else "❌"
-                masked_email = self.mask_email(email)
-                message += f"{status} <i>{masked_email}</i>: {result}\n"
+                status = "✅" if r['success'] else "❌"
+                masked_email = self.mask_email(r['email'])
+                
+                # 使用HTML的code标签来格式化邮箱，更美观
+                message += f"\n{status} <b>账号:</b> <code>{masked_email}</code>\n"
+                message += f"<b>结果:</b> {r['result']}\n"
+                
+                if r['traffic']:
+                    for traffic_line in r['traffic']:
+                        # 使用空格进行缩进，使其看起来像一个列表项
+                        message += f"  - {traffic_line}\n"
+            
             url = f"https://api.telegram.org/bot{self.telegram_bot_token}/sendMessage"
+            
+            # 发送消息
             data = {
                 "chat_id": self.telegram_chat_id,
-                "text": message,
-                "parse_mode": "HTML"
+                "text": message.strip(),
+                "parse_mode": "HTML",
+                "disable_web_page_preview": True
             }
+            
             response = requests.post(url, data=data, timeout=10)
             if response.status_code == 200:
                 logger.info("Telegram通知发送成功")
@@ -273,7 +292,7 @@ class MultiAccountManager:
                 logger.error(f"Telegram通知发送失败: {response.text}")
         except Exception as e:
             logger.error(f"发送Telegram通知时出错: {e}")
-    
+
     def run_all(self):
         """运行所有账号的签到流程"""
         logger.info(f"开始执行 {len(self.accounts)} 个账号的签到任务")
@@ -345,6 +364,7 @@ def main():
         else:
             success_count = sum(1 for r in detailed_results if r['success'])
             logger.warning(f"⚠️ 部分账号签到失败: {success_count}/{len(detailed_results)} 成功")
+            # 即使部分失败，也正常退出，因为签到任务已完成
             exit(0)
     except Exception as e:
         logger.error(f"❌ 脚本执行出错: {e}")
@@ -352,3 +372,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
