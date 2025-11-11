@@ -20,10 +20,11 @@ jobs:
         python -m pip install --upgrade pip
         pip install -r requirements.txt
 
-    - name: Run ikuuu_checkin.py
+    - name: Run netlib_login.py
       env:
-        IKUUU_ACCOUNTS: ${{ secrets.IKUUU_ACCOUNTS }}
+        NTLB_ACCOUNTS: ${{ secrets.NTLB_ACCOUNTS }}
         TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
         TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
       run: |
-        python3 ikuuu_checkin.py
+        playwright install
+        python3 netlib_login.py
