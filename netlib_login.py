@@ -8,8 +8,8 @@ from playwright.sync_api import sync_playwright
 
 # 1. 从环境变量中读取配置
 # Telegram Bot 配置
-token = os.environ.get('BOT_TOKEN')
-chat_id = os.environ.get('CHAT_ID')
+token = os.getenv('TELEGRAM_BOT_TOKEN', '')
+chat_id = os.getenv('TELEGRAM_CHAT_ID', '')
 # 账号配置 (格式: user1:pass1,user2:pass2)
 accounts_str = os.environ.get('NTLB_ACCOUNTS')
 
