@@ -4,6 +4,7 @@ ClawCloud 自动登录脚本
 - 等待设备验证批准（30秒）
 - 每次登录后自动更新 Cookie
 - Telegram 通知
+- 企业微信 Bot 通知
 """
 
 import os
@@ -117,6 +118,121 @@ class Telegram:
         return None
 
 
+class WeComBot:
+    """企业微信机器人通知"""
+    
+    def __init__(self):
+        # 从环境变量获取企业微信机器人webhook
+        self.webhook_url = os.environ.get('WXWORK_BOT_WEBHOOK')
+        self.ok = bool(self.webhook_url)
+        if self.ok:
+            print("✅ 企业微信 Bot 通知已启用")
+        else:
+            print("⚠️ 企业微信 Bot 通知未启用（需要 WXWORK_BOT_WEBHOOK）")
+    
+    def send(self, msg):
+        """发送文本消息到企业微信"""
+        if not self.ok:
+            return
+        
+        # 转换 Telegram 的 HTML 格式到企业微信支持的格式
+        # 移除 Telegram 的 HTML 标签，保留核心内容
+        clean_msg = re.sub(r'<[^>]+>', '', msg)
+        # 替换一些特殊符号
+        clean_msg = clean_msg.replace("🔹", "▪️").replace("ℹ️", "ℹ").replace("✅", "✔").replace("❌", "❌").replace("⚠️", "⚠").replace("🔑", "🔑")
+        
+        try:
+            requests.post(
+                self.webhook_url,
+                json={
+                    "msgtype": "text",
+                    "text": {
+                        "content": clean_msg
+                    }
+                },
+                timeout=30
+            )
+        except Exception as e:
+            print(f"❌ 企业微信消息发送失败: {e}")
+            pass
+    
+    def send_markdown(self, msg):
+        """发送Markdown消息到企业微信（支持简单格式）"""
+        if not self.ok:
+            return
+        
+        # 转换 Telegram HTML 到企业微信 Markdown
+        markdown_msg = msg
+        # 替换标签
+        markdown_msg = re.sub(r'<b>(.*?)</b>', r'**\1**', markdown_msg)
+        markdown_msg = re.sub(r'<code>(.*?)</code>', r'`\1`', markdown_msg)
+        markdown_msg = re.sub(r'<[^>]+>', '', markdown_msg)
+        # 替换特殊符号
+        markdown_msg = markdown_msg.replace("🔹", "▪️").replace("ℹ️", "ℹ").replace("✅", "✔").replace("❌", "❌").replace("⚠️", "⚠").replace("🔑", "🔑")
+        
+        try:
+            requests.post(
+                self.webhook_url,
+                json={
+                    "msgtype": "markdown",
+                    "markdown": {
+                        "content": markdown_msg
+                    }
+                },
+                timeout=30
+            )
+        except Exception as e:
+            print(f"❌ 企业微信Markdown消息发送失败: {e}")
+            pass
+    
+    def send_image(self, path, caption=""):
+        """发送图片到企业微信"""
+        if not self.ok or not os.path.exists(path):
+            return
+        
+        try:
+            # 企业微信图片需要先上传获取media_id
+            # 1. 读取图片并base64编码
+            with open(path, 'rb') as f:
+                image_data = f.read()
+                base64_data = base64.b64encode(image_data).decode()
+            
+            # 2. 获取图片md5
+            import hashlib
+            md5_hash = hashlib.md5(image_data).hexdigest()
+            
+            # 3. 上传图片
+            upload_url = "https://qyapi.weixin.qq.com/cgi-bin/webhook/upload_media"
+            params = {
+                "key": self.webhook_url.split('key=')[-1],
+                "type": "image"
+            }
+            files = {
+                "media": (os.path.basename(path), image_data)
+            }
+            r = requests.post(upload_url, params=params, files=files, timeout=30)
+            if r.status_code == 200:
+                data = r.json()
+                if data.get("errcode") == 0 and data.get("media_id"):
+                    # 4. 发送图片
+                    requests.post(
+                        self.webhook_url,
+                        json={
+                            "msgtype": "image",
+                            "image": {
+                                "media_id": data["media_id"]
+                            }
+                        },
+                        timeout=30
+                    )
+                    # 如果有说明文字，单独发送文本
+                    if caption:
+                        self.send(f"图片说明：{caption}")
+        except Exception as e:
+            print(f"❌ 企业微信图片发送失败: {e}")
+            pass
+
+
 class SecretUpdater:
     """GitHub Secret 更新器"""
     
@@ -173,6 +289,7 @@ class AutoLogin:
         self.password = os.environ.get('GH_PASSWORD')
         self.gh_session = os.environ.get('GH_SESSION', '').strip()
         self.tg = Telegram()
+        self.wxwork = WeComBot()  # 初始化企业微信机器人
         self.secret = SecretUpdater()
         self.shots = []
         self.logs = []
@@ -226,28 +343,35 @@ class AutoLogin:
         # 自动更新 Secret
         if self.secret.update('GH_SESSION', value):
             self.log("已自动更新 GH_SESSION", "SUCCESS")
-            self.tg.send("🔑 <b>Cookie 已自动更新</b>\n\nGH_SESSION 已保存")
+            notify_msg = "🔑 <b>Cookie 已自动更新</b>\n\nGH_SESSION 已保存"
+            self.tg.send(notify_msg)
+            self.wxwork.send_markdown(notify_msg)  # 企业微信通知
         else:
-            # 通过 Telegram 发送
-            self.tg.send(f"""🔑 <b>新 Cookie</b>
+            # 通过 Telegram 和企业微信发送
+            notify_msg = f"""🔑 <b>新 Cookie</b>
 
 请更新 Secret <b>GH_SESSION</b>:
-<code>{value}</code>""")
-            self.log("已通过 Telegram 发送 Cookie", "SUCCESS")
+<code>{value}</code>"""
+            self.tg.send(notify_msg)
+            self.wxwork.send_markdown(notify_msg)  # 企业微信通知
+            self.log("已通过 Telegram 和企业微信发送 Cookie", "SUCCESS")
     
     def wait_device(self, page):
         """等待设备验证"""
         self.log(f"需要设备验证，等待 {DEVICE_VERIFY_WAIT} 秒...", "WARN")
         self.shot(page, "设备验证")
         
-        self.tg.send(f"""⚠️ <b>需要设备验证</b>
+        notify_msg = f"""⚠️ <b>需要设备验证</b>
 
 请在 {DEVICE_VERIFY_WAIT} 秒内批准：
 1️⃣ 检查邮箱点击链接
-2️⃣ 或在 GitHub App 批准""")
+2️⃣ 或在 GitHub App 批准"""
+        self.tg.send(notify_msg)
+        self.wxwork.send_markdown(notify_msg)  # 企业微信通知
         
         if self.shots:
             self.tg.photo(self.shots[-1], "设备验证页面")
+            self.wxwork.send_image(self.shots[-1], "设备验证页面")  # 企业微信发送图片
         
         for i in range(DEVICE_VERIFY_WAIT):
             time.sleep(1)
@@ -256,7 +380,9 @@ class AutoLogin:
                 url = page.url
                 if 'verified-device' not in url and 'device-verification' not in url:
                     self.log("设备验证通过！", "SUCCESS")
-                    self.tg.send("✅ <b>设备验证通过</b>")
+                    success_msg = "✅ <b>设备验证通过</b>"
+                    self.tg.send(success_msg)
+                    self.wxwork.send(success_msg)  # 企业微信通知
                     return True
                 try:
                     page.reload(timeout=10000)
@@ -268,21 +394,27 @@ class AutoLogin:
             return True
         
         self.log("设备验证超时", "ERROR")
-        self.tg.send("❌ <b>设备验证超时</b>")
+        error_msg = "❌ <b>设备验证超时</b>"
+        self.tg.send(error_msg)
+        self.wxwork.send(error_msg)  # 企业微信通知
         return False
     
     def wait_two_factor_mobile(self, page):
-        """等待 GitHub Mobile 两步验证批准，并把数字截图提前发到电报"""
+        """等待 GitHub Mobile 两步验证批准，并把数字截图提前发到电报和企业微信"""
         self.log(f"需要两步验证（GitHub Mobile），等待 {TWO_FACTOR_WAIT} 秒...", "WARN")
         
         # 先截图并立刻发出去（让你看到数字）
         shot = self.shot(page, "两步验证_mobile")
-        self.tg.send(f"""⚠️ <b>需要两步验证（GitHub Mobile）</b>
+        notify_msg = f"""⚠️ <b>需要两步验证（GitHub Mobile）</b>
 
 请打开手机 GitHub App 批准本次登录（会让你确认一个数字）。
-等待时间：{TWO_FACTOR_WAIT} 秒""")
+等待时间：{TWO_FACTOR_WAIT} 秒"""
+        self.tg.send(notify_msg)
+        self.wxwork.send_markdown(notify_msg)  # 企业微信通知
+        
         if shot:
             self.tg.photo(shot, "两步验证页面（数字在图里）")
+            self.wxwork.send_image(shot, "两步验证页面（数字在图里）")  # 企业微信发送图片
         
         # 不要频繁 reload，避免把流程刷回登录页
         for i in range(TWO_FACTOR_WAIT):
@@ -293,12 +425,17 @@ class AutoLogin:
             # 如果离开 two-factor 流程页面，认为通过
             if "github.com/sessions/two-factor/" not in url:
                 self.log("两步验证通过！", "SUCCESS")
-                self.tg.send("✅ <b>两步验证通过</b>")
+                success_msg = "✅ <b>两步验证通过</b>"
+                self.tg.send(success_msg)
+                self.wxwork.send(success_msg)  # 企业微信通知
                 return True
             
             # 如果被刷回登录页，说明这次流程断了（不要硬等）
             if "github.com/login" in url:
                 self.log("两步验证后回到了登录页，需重新登录", "ERROR")
+                error_msg = "❌ <b>两步验证后回到了登录页，需重新登录</b>"
+                self.tg.send(error_msg)
+                self.wxwork.send(error_msg)  # 企业微信通知
                 return False
             
             # 每 10 秒打印一次，并补发一次截图（防止你没看到数字）
@@ -307,6 +444,7 @@ class AutoLogin:
                 shot = self.shot(page, f"两步验证_{i}s")
                 if shot:
                     self.tg.photo(shot, f"两步验证页面（第{i}秒）")
+                    self.wxwork.send_image(shot, f"两步验证页面（第{i}秒）")  # 企业微信发送图片
             
             # 只在 30 秒、60 秒... 做一次轻刷新（可选，频率很低）
             if i % 30 == 0 and i != 0:
@@ -317,7 +455,9 @@ class AutoLogin:
                     pass
         
         self.log("两步验证超时", "ERROR")
-        self.tg.send("❌ <b>两步验证超时</b>")
+        error_msg = "❌ <b>两步验证超时</b>"
+        self.tg.send(error_msg)
+        self.wxwork.send(error_msg)  # 企业微信通知
         return False
     
     def handle_2fa_code_input(self, page):
@@ -349,26 +489,34 @@ class AutoLogin:
             pass
         
         # 发送提示并等待验证码
-        self.tg.send(f"""🔐 <b>需要验证码登录</b>
+        notify_msg = f"""🔐 <b>需要验证码登录</b>
 
 请在 Telegram 里发送：
 <code>/code 你的6位验证码</code>
 
-等待时间：{TWO_FACTOR_WAIT} 秒""")
+等待时间：{TWO_FACTOR_WAIT} 秒"""
+        self.tg.send(notify_msg)
+        self.wxwork.send_markdown(notify_msg)  # 企业微信通知
+        
         if shot:
             self.tg.photo(shot, "两步验证页面")
+            self.wxwork.send_image(shot, "两步验证页面")  # 企业微信发送图片
         
         self.log(f"等待验证码（{TWO_FACTOR_WAIT}秒）...", "WARN")
         code = self.tg.wait_code(timeout=TWO_FACTOR_WAIT)
         
         if not code:
             self.log("等待验证码超时", "ERROR")
-            self.tg.send("❌ <b>等待验证码超时</b>")
+            error_msg = "❌ <b>等待验证码超时</b>"
+            self.tg.send(error_msg)
+            self.wxwork.send(error_msg)  # 企业微信通知
             return False
         
         # 不打印验证码明文，只提示收到
         self.log("收到验证码，正在填入...", "SUCCESS")
-        self.tg.send("✅ 收到验证码，正在填入...")
+        success_msg = "✅ 收到验证码，正在填入..."
+        self.tg.send(success_msg)
+        self.wxwork.send(success_msg)  # 企业微信通知
         
         # 常见 OTP 输入框 selector（优先级排序）
         selectors = [
@@ -417,17 +565,23 @@ class AutoLogin:
                     # 检查是否通过
                     if "github.com/sessions/two-factor/" not in page.url:
                         self.log("验证码验证通过！", "SUCCESS")
-                        self.tg.send("✅ <b>验证码验证通过</b>")
+                        success_msg = "✅ <b>验证码验证通过</b>"
+                        self.tg.send(success_msg)
+                        self.wxwork.send(success_msg)  # 企业微信通知
                         return True
                     else:
                         self.log("验证码可能错误", "ERROR")
-                        self.tg.send("❌ <b>验证码可能错误，请检查后重试</b>")
+                        error_msg = "❌ <b>验证码可能错误，请检查后重试</b>"
+                        self.tg.send(error_msg)
+                        self.wxwork.send(error_msg)  # 企业微信通知
                         return False
             except:
                 pass
         
         self.log("没找到验证码输入框", "ERROR")
-        self.tg.send("❌ <b>没找到验证码输入框</b>")
+        error_msg = "❌ <b>没找到验证码输入框</b>"
+        self.tg.send(error_msg)
+        self.wxwork.send(error_msg)  # 企业微信通知
         return False
     
     def login_github(self, page, context):
@@ -542,7 +696,8 @@ class AutoLogin:
         self.shot(page, "完成")
     
     def notify(self, ok, err=""):
-        if not self.tg.ok:
+        """发送最终结果通知（Telegram + 企业微信）"""
+        if not self.tg.ok and not self.wxwork.ok:
             return
         
         msg = f"""<b>🤖 ClawCloud 自动登录</b>
@@ -556,14 +711,18 @@ class AutoLogin:
         
         msg += "\n\n<b>日志:</b>\n" + "\n".join(self.logs[-6:])
         
+        # 发送到 Telegram 和企业微信
         self.tg.send(msg)
+        self.wxwork.send_markdown(msg)
         
         if self.shots:
             if not ok:
                 for s in self.shots[-3:]:
                     self.tg.photo(s, s)
+                    self.wxwork.send_image(s, s)  # 企业微信发送图片
             else:
                 self.tg.photo(self.shots[-1], "完成")
+                self.wxwork.send_image(self.shots[-1], "完成")  # 企业微信发送图片
     
     def run(self):
         print("\n" + "="*50)
