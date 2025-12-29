@@ -30,5 +30,6 @@ jobs:
         TG_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
         TG_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         REPO_TOKEN: ${{ secrets.REPO_TOKEN }}
+        WXWORK_BOT_WEBHOOK: ${{ secrets.WXWORK_BOT_WEBHOOK }}
       run: |
         python claw_login.py
