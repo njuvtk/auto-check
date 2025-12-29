@@ -19,12 +19,16 @@ jobs:
       run: |
         python -m pip install --upgrade pip
         pip install -r requirements.txt
-
-    - name: Run netlib_login.py
+        playwright install chromium
+        playwright install-deps
+        
+    - name: Run claw_login.py
       env:
-        NTLB_ACCOUNTS: ${{ secrets.NTLB_ACCOUNTS }}
-        TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-        TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        GH_USERNAME: ${{ secrets.GH_USERNAME }}
+        GH_PASSWORD: ${{ secrets.GH_PASSWORD }}
+        GH_SESSION: ${{ secrets.GH_SESSION }}
+        TG_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        TG_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        REPO_TOKEN: ${{ secrets.REPO_TOKEN }}
       run: |
-        playwright install
-        python3 netlib_login.py
+        python claw_login.py
